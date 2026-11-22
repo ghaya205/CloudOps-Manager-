@@ -1,0 +1,260 @@
+
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  DEVOPS
+  VIEWER
+}
+
+enum ProjectStatus {
+  PLANNED
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  ARCHIVED
+}
+
+enum ProjectRole {
+  OWNER
+  MANAGER
+  MEMBER
+}
+
+enum EnvironmentName {
+  DEV
+  STAGING
+  PRODUCTION
+}
+
+enum ServerStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  UNAVAILABLE
+}
+
+enum ApplicationStatus {
+  RUNNING
+  STOPPED
+  DEPLOYING
+  FAILED
+}
+
+enum AlertMetric {
+  CPU
+  RAM
+  AVAILABILITY
+}
+
+enum AlertOperator {
+  GT
+  GTE
+  LT
+  LTE
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(VIEWER)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ownedProjects      Project[]
+  memberships        ProjectMember[]
+  acknowledgedAlerts Alert[]         @relation("AlertAcknowledgedBy")
+  resolvedAlerts     Alert[]         @relation("AlertResolvedBy")
+}
+
+model Team {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members ProjectMember[]
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  name        String        @unique
+  description String?
+  status      ProjectStatus @default(PLANNED)
+  startDate   DateTime?
+  endDate     DateTime?
+  ownerId     String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  owner        User            @relation(fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  environments Environment[]
+  servers      Server[]
+  members      ProjectMember[]
+
+  @@index([ownerId])
+  @@index([status])
+}
+
+model ProjectMember {
+  id        String      @id @default(uuid())
+  role      ProjectRole @default(MEMBER)
+  projectId String
+  userId    String
+  teamId    String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  team    Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([teamId])
+}
+
+model Environment {
+  id        String          @id @default(uuid())
+  name      EnvironmentName
+  projectId String
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  servers      Server[]
+  applications Application[]
+
+  @@unique([projectId, name])
+}
+
+model Server {
+  id            String       @id @default(uuid())
+  name          String
+  provider      String
+  region        String
+  cpu           Int // number of CPU cores
+  ramGb         Int
+  storageGb     Int
+  ipAddress     String
+  status        ServerStatus @default(ACTIVE)
+  projectId     String
+  environmentId String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  environment  Environment   @relation(fields: [environmentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  applications Application[]
+  metrics      Metric[]
+  alertRules   AlertRule[]
+  alerts       Alert[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+  @@index([environmentId])
+  @@index([provider])
+  @@index([status])
+}
+
+model Application {
+  id            String            @id @default(uuid())
+  name          String
+  version       String
+  status        ApplicationStatus @default(RUNNING)
+  serverId      String
+  environmentId String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  server      Server      @relation(fields: [serverId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  environment Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([serverId, name])
+  @@index([environmentId])
+  @@index([status])
+}
+
+model Metric {
+  id         Int      @id @default(autoincrement())
+  serverId   String
+  cpuPercent Float
+  ramPercent Float
+  timestamp  DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  // NFR-6: history queries filter by server and time range
+  @@index([serverId, timestamp])
+}
+
+model AlertRule {
+  id        String        @id @default(uuid())
+  metric    AlertMetric
+  operator  AlertOperator
+  threshold Float
+  severity  Severity
+  enabled   Boolean       @default(true)
+  serverId  String? // null = global rule
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  server Server? @relation(fields: [serverId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  alerts Alert[]
+
+  @@index([serverId])
+  @@index([enabled])
+}
+
+model Alert {
+  id               String      @id @default(uuid())
+  severity         Severity
+  status           AlertStatus @default(OPEN)
+  message          String
+  comment          String?
+  openedAt         DateTime    @default(now())
+  acknowledgedAt   DateTime?
+  resolvedAt       DateTime?
+  serverId         String
+  ruleId           String? // kept as history when the rule is deleted
+  acknowledgedById String?
+  resolvedById     String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  server         Server     @relation(fields: [serverId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  rule           AlertRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  acknowledgedBy User?      @relation("AlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  resolvedBy     User?      @relation("AlertResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([serverId, openedAt])
+  @@index([status, severity])
+  @@index([ruleId])
+}
